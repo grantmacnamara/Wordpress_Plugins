@@ -118,4 +118,4 @@ For support questions, please use the WordPress.org plugin support forums.
 
 ---
 
-Made with 🥃 by Grant Macnamara 
+Made by 🥃 by Grant Macnamara (with a little AI help ;) )
