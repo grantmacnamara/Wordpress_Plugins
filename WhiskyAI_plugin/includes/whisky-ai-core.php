@@ -17,10 +17,15 @@ class WhiskyAICore {
     private $openai_key;
     private $flavor_categories;
     private $options;
+    private $openai;
 
     public function __construct() {
         $this->options = get_option('whisky_ai_settings');
         $this->openai_key = $this->options['openai_api_key'] ?? '';
+
+        if (!empty($this->openai_key)) {
+            $this->openai = new OpenAI($this->openai_key);
+        }
         
         // Set the correct flavor categories
         $this->flavor_categories = array(
@@ -53,176 +58,157 @@ class WhiskyAICore {
     public function generate_descriptions() {
         check_ajax_referer('whisky_ai_nonce', 'nonce');
 
-        if (empty($this->openai_key)) {
-            wp_send_json_error(array(
-                'message' => 'OpenAI API key is not set',
-                'debug' => array(
-                    'error' => 'Missing API Key',
-                    'key_length' => 0
-                )
-            ));
+        if (empty($this->openai_key) || !$this->openai) {
+            wp_send_json_error(array('message' => 'OpenAI API key is not set or invalid.'));
             return;
         }
 
-        $product_id = intval($_POST['product_id']);
-        $product = wc_get_product($product_id);
+        $product_ids = isset($_POST['product_ids']) ? array_map('intval', (array)$_POST['product_ids']) : array();
 
-        if (!$product) {
-            wp_send_json_error(array(
-                'message' => 'Product not found',
-                'debug' => array(
-                    'error' => 'Invalid Product ID',
-                    'product_id' => $product_id
-                )
-            ));
+        if (empty($product_ids)) {
+            wp_send_json_error(array('message' => 'No product IDs provided.'));
             return;
         }
 
-        try {
-            // Generate description
-            $description_result = $this->generate_description($product->get_name());
-            $description = $description_result['content'];
+        $result = $this->process_descriptions($product_ids);
 
-            // Update product
-            $product->set_description($description);
-            
-            // Add DescUpdated tag
-            $tags = wp_get_post_terms($product_id, 'product_tag', array('fields' => 'ids'));
-            $desc_updated_tag = get_term_by('name', 'DescUpdated', 'product_tag');
-            if ($desc_updated_tag) {
-                if (!in_array($desc_updated_tag->term_id, $tags)) {
-                    $tags[] = $desc_updated_tag->term_id;
-                }
-            } else {
-                $new_tag = wp_insert_term('DescUpdated', 'product_tag');
-                if (!is_wp_error($new_tag)) {
-                    $tags[] = $new_tag['term_id'];
-                }
-            }
-            wp_set_post_terms($product_id, array_unique($tags), 'product_tag');
-            
-            $product->save();
-
+        if (empty($result['errors'])) {
             wp_send_json_success(array(
-                'message' => 'Description updated successfully',
-                'description' => $description,
-                'debug' => array(
-                    'product' => array(
-                        'id' => $product_id,
-                        'name' => $product->get_name(),
-                        'original_description' => $product->get_description(),
-                        'new_description' => $description
-                    ),
-                    'openai' => $description_result['debug'],
-                    'tags' => array(
-                        'before' => wp_get_post_terms($product_id, 'product_tag', array('fields' => 'names')),
-                        'after' => wp_get_object_terms($product_id, 'product_tag', array('fields' => 'names'))
-                    )
-                )
+                'message' => 'Descriptions updated successfully.',
+                'results' => $result['results']
             ));
-        } catch (Exception $e) {
+        } else {
             wp_send_json_error(array(
-                'message' => $e->getMessage(),
-                'debug' => array(
-                    'error' => $e->getMessage(),
-                    'trace' => $e->getTraceAsString(),
-                    'openai_debug' => method_exists($e, 'getDebugInfo') ? $e->getDebugInfo() : null
-                )
+                'message' => 'Some descriptions failed to update.',
+                'errors' => $result['errors'],
+                'results' => $result['results']
             ));
         }
+    }
+
+    public function process_descriptions($product_ids) {
+        $results = array();
+        $errors = array();
+
+        foreach ($product_ids as $product_id) {
+            $product = wc_get_product($product_id);
+
+            if (!$product) {
+                $errors[$product_id] = 'Product not found.';
+                continue;
+            }
+
+            try {
+                // Generate description
+                $description_result = $this->generate_description($product->get_name());
+                $description = $description_result['content'];
+
+                // Update product
+                $product->set_description($description);
+                
+                // Add DescUpdated tag
+                wp_set_object_terms($product_id, 'DescUpdated', 'product_tag', true);
+                
+                $product->save();
+
+                $results[$product_id] = array(
+                    'success' => true,
+                    'description' => $description,
+                    'debug' => $description_result['debug']
+                );
+
+            } catch (Exception $e) {
+                $errors[$product_id] = $e->getMessage();
+            }
+        }
+
+        return ['results' => $results, 'errors' => $errors];
     }
 
     public function generate_categories_endpoint() {
         check_ajax_referer('whisky_ai_nonce', 'nonce');
 
-        if (empty($this->openai_key)) {
-            wp_send_json_error(array(
-                'message' => 'OpenAI API key is not set',
-                'debug' => array(
-                    'error' => 'Missing API Key',
-                    'key_length' => 0
-                )
-            ));
+        if (empty($this->openai_key) || !$this->openai) {
+            wp_send_json_error(array('message' => 'OpenAI API key is not set or invalid.'));
             return;
         }
 
-        $product_id = intval($_POST['product_id']);
-        $product = wc_get_product($product_id);
+        $product_ids = isset($_POST['product_ids']) ? array_map('intval', (array)$_POST['product_ids']) : array();
 
-        if (!$product) {
-            wp_send_json_error(array(
-                'message' => 'Product not found',
-                'debug' => array(
-                    'error' => 'Invalid Product ID',
-                    'product_id' => $product_id
-                )
-            ));
+        if (empty($product_ids)) {
+            wp_send_json_error(array('message' => 'No product IDs provided.'));
             return;
         }
+        
+        $result = $this->process_categories($product_ids);
 
-        try {
-            // Generate categories
-            $categories_result = $this->generate_categories($product->get_name());
-            $categories = $categories_result['category_ids'];
-
-            // Update categories
-            $current_categories = $product->get_category_ids();
-            $new_categories = array_merge($current_categories, $categories);
-            $product->set_category_ids($new_categories);
-            
-            // Add CatUpdated tag
-            $tags = wp_get_post_terms($product_id, 'product_tag', array('fields' => 'ids'));
-            $cat_updated_tag = get_term_by('name', 'CatUpdated', 'product_tag');
-            if ($cat_updated_tag) {
-                if (!in_array($cat_updated_tag->term_id, $tags)) {
-                    $tags[] = $cat_updated_tag->term_id;
-                }
-            } else {
-                $new_tag = wp_insert_term('CatUpdated', 'product_tag');
-                if (!is_wp_error($new_tag)) {
-                    $tags[] = $new_tag['term_id'];
-                }
-            }
-            wp_set_post_terms($product_id, array_unique($tags), 'product_tag');
-            
-            $product->save();
-
+        if (empty($result['errors'])) {
             wp_send_json_success(array(
-                'message' => 'Categories updated successfully',
-                'categories' => $categories,
-                'debug' => array(
-                    'product' => array(
-                        'id' => $product_id,
-                        'name' => $product->get_name(),
-                        'original_categories' => $current_categories,
-                        'new_categories' => $new_categories,
-                        'detected_categories' => array_keys(array_filter($this->flavor_categories, function($id) use ($categories) {
-                            return in_array($id, $categories);
-                        }))
-                    ),
-                    'openai' => $categories_result['debug'],
-                    'raw_response' => $categories_result['raw_text'],
-                    'tags' => array(
-                        'before' => wp_get_post_terms($product_id, 'product_tag', array('fields' => 'names')),
-                        'after' => wp_get_object_terms($product_id, 'product_tag', array('fields' => 'names'))
-                    )
-                )
+                'message' => 'Categories updated successfully.',
+                'results' => $result['results']
             ));
-        } catch (Exception $e) {
+        } else {
             wp_send_json_error(array(
-                'message' => $e->getMessage(),
-                'debug' => array(
-                    'error' => $e->getMessage(),
-                    'trace' => $e->getTraceAsString(),
-                    'openai_debug' => method_exists($e, 'getDebugInfo') ? $e->getDebugInfo() : null
-                )
+                'message' => 'Some categories failed to update.',
+                'errors' => $result['errors'],
+                'results' => $result['results']
             ));
         }
     }
 
+    public function process_categories($product_ids) {
+        $results = array();
+        $errors = array();
+
+        foreach ($product_ids as $product_id) {
+            $product = wc_get_product($product_id);
+
+            if (!$product) {
+                $errors[$product_id] = 'Product not found.';
+                continue;
+            }
+
+            try {
+                // Generate categories
+                $categories_result = $this->generate_categories($product->get_name());
+                $category_ids = $categories_result['category_ids'];
+
+                // Update categories
+                $current_categories = $product->get_category_ids();
+                $new_categories = array_unique(array_merge($current_categories, $category_ids));
+                $product->set_category_ids($new_categories);
+                
+                // Add CatUpdated tag
+                wp_set_object_terms($product_id, 'CatUpdated', 'product_tag', true);
+                
+                $product->save();
+
+                $category_names = array();
+                foreach ($category_ids as $cat_id) {
+                    $term = get_term($cat_id, 'product_cat');
+                    if ($term && !is_wp_error($term)) {
+                        $category_names[] = $term->name;
+                    }
+                }
+
+                $results[$product_id] = array(
+                    'success' => true,
+                    'categories' => $category_ids,
+                    'category_names' => $category_names,
+                    'debug' => $categories_result['debug']
+                );
+
+            } catch (Exception $e) {
+                $errors[$product_id] = $e->getMessage();
+            }
+        }
+
+        return ['results' => $results, 'errors' => $errors];
+    }
+
     private function generate_description($product_name) {
         $request_data = array(
-            'model' => 'gpt-4o-mini',
+            'model' => $this->options['openai_model'] ?? 'gpt-4o-mini',
             'messages' => array(
                 array(
                     'role' => 'system',
@@ -235,67 +221,35 @@ class WhiskyAICore {
             )
         );
 
-        $api_response = wp_remote_post('https://api.openai.com/v1/chat/completions', array(
-            'headers' => array(
-                'Authorization' => 'Bearer ' . $this->openai_key,
-                'Content-Type' => 'application/json',
-            ),
-            'body' => json_encode($request_data)
-        ));
+        $response = $this->openai->chat($request_data);
 
-        if (is_wp_error($api_response)) {
+        if (isset($response['error'])) {
             throw new WhiskyAIException(
-                'OpenAI API Connection Error: ' . $api_response->get_error_message(),
+                'OpenAI API Error: ' . $response['error']['message'],
                 0,
                 null,
-                array('wp_error' => $api_response->get_error_messages())
+                array('api_request' => $request_data, 'api_response' => $response)
             );
         }
 
-        $response_code = wp_remote_retrieve_response_code($api_response);
-        $response_body = json_decode(wp_remote_retrieve_body($api_response), true);
-
-        // Prepare debug info
-        $debug_info = array(
-            'api_request' => array(
-                'endpoint' => 'https://api.openai.com/v1/chat/completions',
-                'model' => 'gpt-3.5-turbo',
-                'messages' => $request_data['messages']
-            ),
-            'api_response' => array(
-                'status_code' => $response_code,
-                'body' => $response_body
-            )
-        );
-
-        if ($response_code !== 200) {
-            throw new WhiskyAIException(
-                'OpenAI API Error: ' . ($response_body['error']['message'] ?? 'Unknown error') . 
-                ' (Status Code: ' . $response_code . ')',
-                $response_code,
-                null,
-                $debug_info
-            );
-        }
-
-        if (empty($response_body['choices'][0]['message']['content'])) {
+        if (empty($response['choices'][0]['message']['content'])) {
             throw new WhiskyAIException(
                 'No description generated from OpenAI',
                 0,
                 null,
-                $debug_info
+                array('api_request' => $request_data, 'api_response' => $response)
             );
         }
 
         return array(
-            'content' => $response_body['choices'][0]['message']['content'],
-            'debug' => $debug_info
+            'content' => $response['choices'][0]['message']['content'],
+            'debug' => array('api_request' => $request_data, 'api_response' => $response)
         );
     }
 
     private function generate_categories($product_name) {
         $request_data = array(
-            'model' => 'gpt-3.5-turbo',
+            'model' => $this->options['openai_model'] ?? 'gpt-3.5-turbo',
             'messages' => array(
                 array(
                     'role' => 'system',
@@ -308,82 +262,53 @@ class WhiskyAICore {
             )
         );
 
-        $api_response = wp_remote_post('https://api.openai.com/v1/chat/completions', array(
-            'headers' => array(
-                'Authorization' => 'Bearer ' . $this->openai_key,
-                'Content-Type' => 'application/json',
-            ),
-            'body' => json_encode($request_data)
-        ));
+        $response = $this->openai->chat($request_data);
 
-        if (is_wp_error($api_response)) {
+        if (isset($response['error'])) {
             throw new WhiskyAIException(
-                'OpenAI API Connection Error: ' . $api_response->get_error_message(),
+                'OpenAI API Error: ' . $response['error']['message'],
                 0,
                 null,
-                array('wp_error' => $api_response->get_error_messages())
+                array('api_request' => $request_data, 'api_response' => $response)
             );
         }
 
-        $response_code = wp_remote_retrieve_response_code($api_response);
-        $response_body = json_decode(wp_remote_retrieve_body($api_response), true);
-
-        // Prepare debug info
-        $debug_info = array(
-            'api_request' => array(
-                'endpoint' => 'https://api.openai.com/v1/chat/completions',
-                'model' => 'gpt-3.5-turbo',
-                'messages' => $request_data['messages']
-            ),
-            'api_response' => array(
-                'status_code' => $response_code,
-                'body' => $response_body
-            )
-        );
-
-        if ($response_code !== 200) {
-            throw new WhiskyAIException(
-                'OpenAI API Error: ' . ($response_body['error']['message'] ?? 'Unknown error') . 
-                ' (Status Code: ' . $response_code . ')',
-                $response_code,
-                null,
-                $debug_info
-            );
-        }
-
-        if (empty($response_body['choices'][0]['message']['content'])) {
+        if (empty($response['choices'][0]['message']['content'])) {
             throw new WhiskyAIException(
                 'No categories generated from OpenAI',
                 0,
                 null,
-                $debug_info
+                array('api_request' => $request_data, 'api_response' => $response)
             );
         }
         
-        $categories_text = $response_body['choices'][0]['message']['content'];
+        $categories_text = $response['choices'][0]['message']['content'];
         
         // Improved category parsing
         $category_ids = array();
-        $lines = explode("\n", $categories_text);
+        $lines = explode("
+", $categories_text);
         foreach ($lines as $line) {
             // Clean up the line
-            $category = trim($line, " -\t\n\r\0\x0B");
+            $category = trim($line, " -	
+ ");
             if (isset($this->flavor_categories[$category])) {
                 $category_ids[] = $this->flavor_categories[$category];
             }
         }
 
         return array(
-            'category_ids' => $category_ids,
+            'category_ids' => array_unique($category_ids),
             'raw_text' => $categories_text,
-            'debug' => array_merge($debug_info, array(
+            'debug' => array(
+                'api_request' => $request_data, 
+                'api_response' => $response,
                 'parsed_categories' => array_keys(array_filter($this->flavor_categories, function($id) use ($category_ids) {
                     return in_array($id, $category_ids);
                 }))
-            ))
+            )
         );
     }
 }
 
-// Initialize the core functionality
-new WhiskyAICore(); 
+// End of WhiskyAICore class

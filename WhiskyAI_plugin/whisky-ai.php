@@ -3,7 +3,7 @@
  * Plugin Name: WhiskyAI
  * Plugin URI: 
  * Description: This plugin uses OpenAI to generate whisky reviews.
- * Version: 1.0.0
+ * Version: 1.2.5
  * Requires at least: 5.2
  * Requires PHP: 7.2
  * Author: Grant Macnamara
@@ -26,10 +26,15 @@ require_once plugin_dir_path(__FILE__) . 'includes/class-openai.php';
 class WhiskyAI {
     private $options;
     private $flavor_categories;
+    private $core;
     private $default_description_prompt = 'You are a helpful Scottish Whisky chat assistant. You will answer in UK English spelling.';
     private $default_category_prompt = 'We are describing the tasting notes of Scottish Malt Whisky. Only respond using these words to describe Scottish Malt Whisky. Only use these categories to describe if appropriate. Reply only in a list.';
 
     public function __construct() {
+        // Include core functionality
+        require_once plugin_dir_path(__FILE__) . 'includes/whisky-ai-core.php';
+        $this->core = new WhiskyAICore();
+
         // Initialize hooks
         add_action('admin_menu', array($this, 'add_admin_menu'));
         add_action('admin_init', array($this, 'register_settings'));
@@ -37,11 +42,13 @@ class WhiskyAI {
         add_action('wp_ajax_get_whisky_products', array($this, 'get_whisky_products'));
         add_action('wp_ajax_get_whisky_stats', array($this, 'get_whisky_stats'));
         add_action('wp_ajax_verify_openai_api', array($this, 'verify_openai_api'));
+        add_action('wp_ajax_fix_all_missing', array($this, 'fix_all_missing'));
         
+        // Add settings link to plugin page
+        add_filter('plugin_action_links_' . plugin_basename(__FILE__), array($this, 'add_settings_link'));
+
         // Add product page hooks
         add_action('add_meta_boxes', array($this, 'add_product_meta_box'));
-        add_action('wp_ajax_generate_whisky_descriptions', array($this, 'generate_descriptions'));
-        add_action('wp_ajax_generate_whisky_categories', array($this, 'generate_categories_endpoint'));
         
         // Initialize default categories if they don't exist
         if (false === get_option('whisky_ai_categories')) {
@@ -52,13 +59,11 @@ class WhiskyAI {
         $this->options = get_option('whisky_ai_settings', array(
             'openai_api_key' => '',
             'description_prompt' => $this->default_description_prompt,
-            'category_prompt' => $this->default_category_prompt
+            'category_prompt' => $this->default_category_prompt,
+            'openai_model' => 'gpt-4o-mini' // Default model
         ));
         
         $this->flavor_categories = get_option('whisky_ai_categories', $this->get_default_categories());
-
-        // Include core functionality
-        require_once plugin_dir_path(__FILE__) . 'includes/whisky-ai-core.php';
     }
 
     public function enqueue_admin_scripts($hook) {
@@ -75,9 +80,9 @@ class WhiskyAI {
 
         wp_enqueue_script(
             'whisky-ai-admin',
-            plugins_url('assets/js/whisky-ai-admin.js', __FILE__),
+            plugins_url('assets/js/whisky-ai-admin-v1.1.1.js', __FILE__),
             array('jquery'),
-            filemtime(plugin_dir_path(__FILE__) . 'assets/js/whisky-ai-admin.js'),
+            '1.2.2',
             true
         );
 
@@ -87,6 +92,8 @@ class WhiskyAI {
         ));
 
         // Add admin styles
+        wp_register_style('whisky-ai-admin-styles', false);
+        wp_enqueue_style('whisky-ai-admin-styles');
         wp_add_inline_style('whisky-ai-admin-styles', '
             .whisky-stats-box {
                 background: #fff;
@@ -122,6 +129,79 @@ class WhiskyAI {
                 height: 100%;
                 transition: width 0.3s ease-in-out;
             }
+            .whisky-spinner-container {
+                display: none;
+                padding: 20px 0;
+            }
+            .whisky-spinner {
+                border: 4px solid #f3f3f3;
+                border-top: 4px solid #3498db;
+                border-radius: 50%;
+                width: 40px;
+                height: 40px;
+                animation: spin 1s linear infinite;
+                margin: 0 auto;
+            }
+            @keyframes spin {
+                0% { transform: rotate(0deg); }
+                100% { transform: rotate(360deg); }
+            }
+            .whisky-modal {
+                display: none;
+                position: fixed;
+                z-index: 999999;
+                left: 0;
+                top: 0;
+                width: 100%;
+                height: 100%;
+                background-color: rgba(0,0,0,0.4);
+            }
+            .whisky-modal-content {
+                background-color: #fefefe;
+                margin: 5% auto;
+                padding: 20px;
+                border: 1px solid #888;
+                width: 80%;
+                max-width: 600px;
+                border-radius: 4px;
+                max-height: 80vh;
+                overflow-y: auto;
+            }
+            .whisky-modal-close {
+                color: #aaa;
+                float: right;
+                font-size: 28px;
+                font-weight: bold;
+                cursor: pointer;
+            }
+            .whisky-modal-close:hover {
+                color: black;
+            }
+            .debug-steps {
+                margin-bottom: 20px;
+            }
+            .debug-step {
+                padding: 10px;
+                margin: 5px 0;
+                border-radius: 4px;
+                background: #f8f9fa;
+            }
+            .debug-step.success {
+                background: #d4edda;
+                border-color: #c3e6cb;
+            }
+            .debug-step.error {
+                background: #f8d7da;
+                border-color: #f5c6cb;
+            }
+            .debug-response {
+                background: #f8f9fa;
+                padding: 10px;
+                border-radius: 4px;
+                margin-top: 10px;
+                white-space: pre-wrap;
+                font-family: monospace;
+            }
         ');
     }
 
@@ -136,11 +216,16 @@ class WhiskyAI {
 
         // If remaining_only is true, exclude products that have already been processed
         if (isset($_POST['remaining_only']) && $_POST['remaining_only'] === 'true') {
-            $args['meta_query'] = array(
+            $generation_type = isset($_POST['generation_type']) ? sanitize_text_field($_POST['generation_type']) : 'description';
+            $tag = ($generation_type === 'category') ? 'CatUpdated' : 'DescUpdated';
+
+            $args['tax_query'] = array(
                 array(
-                    'key' => '_whisky_ai_processed',
-                    'compare' => 'NOT EXISTS'
-                )
+                    'taxonomy' => 'product_tag',
+                    'field'    => 'name',
+                    'terms'    => $tag,
+                    'operator' => 'NOT IN',
+                ),
             );
         }
 
@@ -164,29 +249,45 @@ class WhiskyAI {
     public function get_whisky_stats() {
         check_ajax_referer('whisky_ai_nonce', 'nonce');
 
-        $args = array(
+        $total_products_query = new WP_Query(array(
             'post_type' => 'product',
             'posts_per_page' => -1,
             'fields' => 'ids'
-        );
+        ));
+        $total_products = $total_products_query->post_count;
 
-        $total_products = count(get_posts($args));
-
-        // Get products with DescUpdated tag
-        $args['tax_query'] = array(
-            array(
-                'taxonomy' => 'product_tag',
-                'field' => 'name',
-                'terms' => 'DescUpdated'
+        $updated_descriptions_query = new WP_Query(array(
+            'post_type' => 'product',
+            'posts_per_page' => -1,
+            'fields' => 'ids',
+            'tax_query' => array(
+                array(
+                    'taxonomy' => 'product_tag',
+                    'field' => 'name',
+                    'terms' => 'DescUpdated'
+                )
             )
-        );
+        ));
+        $updated_descriptions = $updated_descriptions_query->post_count;
 
-        $updated_products = count(get_posts($args));
+        $updated_categories_query = new WP_Query(array(
+            'post_type' => 'product',
+            'posts_per_page' => -1,
+            'fields' => 'ids',
+            'tax_query' => array(
+                array(
+                    'taxonomy' => 'product_tag',
+                    'field' => 'name',
+                    'terms' => 'CatUpdated'
+                )
+            )
+        ));
+        $updated_categories = $updated_categories_query->post_count;
 
         wp_send_json_success(array(
             'total' => $total_products,
-            'updated' => $updated_products,
-            'remaining' => $total_products - $updated_products
+            'missing_descriptions' => $total_products - $updated_descriptions,
+            'missing_categories' => $total_products - $updated_categories
         ));
     }
 
@@ -197,7 +298,7 @@ class WhiskyAI {
             'manage_options',
             'whisky-ai',
             array($this, 'display_admin_page'),
-            'dashicons-bottle'
+            plugins_url('assets/icon.svg', __FILE__)
         );
     }
 
@@ -237,6 +338,14 @@ class WhiskyAI {
             'whisky_ai_main_section'
         );
 
+        add_settings_field(
+            'openai_model',
+            'OpenAI Model',
+            array($this, 'render_model_field'),
+            'whisky_ai_settings',
+            'whisky_ai_main_section'
+        );
+
         // Prompt Settings Section
         add_settings_section(
             'whisky_ai_prompts_section',
@@ -267,6 +376,10 @@ class WhiskyAI {
         
         if (isset($input['openai_api_key'])) {
             $sanitized['openai_api_key'] = sanitize_text_field($input['openai_api_key']);
+        }
+
+        if (isset($input['openai_model'])) {
+            $sanitized['openai_model'] = sanitize_text_field($input['openai_model']);
         }
         
         if (isset($input['description_prompt'])) {
@@ -397,6 +510,18 @@ class WhiskyAI {
         <?php
     }
 
+    public function render_model_field() {
+        $model = isset($this->options['openai_model']) ? $this->options['openai_model'] : 'gpt-4o-mini';
+        $models = array('gpt-4o-mini', 'gpt-3.5-turbo', 'gpt-4', 'gpt-4-turbo');
+        
+        echo '<select name="whisky_ai_settings[openai_model]">';
+        foreach ($models as $m) {
+            echo '<option value="' . esc_attr($m) . '" ' . selected($model, $m, false) . '>' . esc_html($m) . '</option>';
+        }
+        echo '</select>';
+        echo '<p class="description">Select the OpenAI model to use for generating content.</p>';
+    }
+
     public function verify_openai_api() {
         if (!check_ajax_referer('whisky_ai_verify_nonce', 'nonce', false)) {
             wp_send_json_error('Invalid nonce. Please refresh the page and try again.');
@@ -479,114 +604,171 @@ class WhiskyAI {
         if (!current_user_can('manage_options')) {
             return;
         }
+
+        // Get product counts
+        $total_products = (new WP_Query(['post_type' => 'product', 'posts_per_page' => -1, 'fields' => 'ids']))->post_count;
+        
+        $updated_descriptions = (new WP_Query([
+            'post_type' => 'product', 
+            'posts_per_page' => -1, 
+            'fields' => 'ids',
+            'tax_query' => [['taxonomy' => 'product_tag', 'field' => 'name', 'terms' => 'DescUpdated']]
+        ]))->post_count;
+        
+        $updated_categories = (new WP_Query([
+            'post_type' => 'product', 
+            'posts_per_page' => -1, 
+            'fields' => 'ids',
+            'tax_query' => [['taxonomy' => 'product_tag', 'field' => 'name', 'terms' => 'CatUpdated']]
+        ]))->post_count;
+
+        $remaining_descriptions = $total_products - $updated_descriptions;
+        $remaining_categories = $total_products - $updated_categories;
         ?>
+        <style>
+            .wrap {
+                font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Oxygen-Sans, Ubuntu, Cantarell, "Helvetica Neue", sans-serif;
+            }
+            .nav-tab-wrapper {
+                border-bottom: 1px solid #ccc;
+                margin-bottom: 20px;
+            }
+            .nav-tab {
+                padding: 10px 20px;
+                border: 1px solid #ccc;
+                border-bottom: none;
+                background: #f1f1f1;
+                cursor: pointer;
+                font-size: 16px;
+                margin-right: 5px;
+                border-radius: 4px 4px 0 0;
+            }
+            .nav-tab-active {
+                background: #fff;
+                border-bottom: 1px solid #fff;
+            }
+            .tab-content {
+                display: none;
+            }
+            .tab-content.active {
+                display: block;
+            }
+            .whisky-card {
+                background: #fff;
+                padding: 20px;
+                margin-bottom: 20px;
+                border: 1px solid #ccc;
+                border-radius: 4px;
+            }
+        </style>
         <div class="wrap">
             <h1><?php echo esc_html(get_admin_page_title()); ?></h1>
-            
-            <div class="whisky-stats-box">
-                <h2>Product Statistics</h2>
-                <div id="whisky-stats">
-                    <p>Loading statistics...</p>
+            <p>Version: <?php echo esc_html(get_plugin_data(__FILE__)['Version']); ?></p>
+
+            <div class="nav-tab-wrapper">
+                <button class="nav-tab nav-tab-active" data-tab="dashboard">Dashboard</button>
+                <button class="nav-tab" data-tab="settings">Settings</button>
+                <button class="nav-tab" data-tab="categories">Flavor Categories</button>
+            </div>
+
+            <div id="dashboard" class="tab-content active">
+                <div class="whisky-card">
+                    <h2>Product Statistics</h2>
+                    <div id="whisky-stats">
+                        <p>Loading statistics...</p>
+                    </div>
+                </div>
+                <div class="whisky-card">
+                    <h2>Bulk Generation</h2>
+                    <div style="display: flex; align-items: center; gap: 20px; margin-bottom: 20px;">
+                        <button type="button" class="button button-primary button-hero" id="fix-all-missing">
+                            Fix All Missing Descriptions & Categories
+                        </button>
+                        <p class="description">
+                            This will generate descriptions for <?php echo esc_html($remaining_descriptions); ?> products and 
+                            categories for <?php echo esc_html($remaining_categories); ?> products.
+                        </p>
+                    </div>
+                    <div class="generate-buttons" style="display: grid; grid-template-columns: auto 1fr; gap: 10px 20px; align-items: center; max-width: 600px;">
+                        <button type="button" class="button button-secondary" id="generate-remaining-descriptions">
+                            Generate Remaining Descriptions
+                        </button>
+                        <span><?php echo esc_html($remaining_descriptions); ?> products</span>
+
+                        <button type="button" class="button button-secondary" id="generate-remaining-categories">
+                            Generate Remaining Categories
+                        </button>
+                        <span><?php echo esc_html($remaining_categories); ?> products</span>
+
+                        <button type="button" class="button" id="generate-all-descriptions">
+                            Generate All Descriptions
+                        </button>
+                        <span><?php echo esc_html($total_products); ?> products</span>
+
+                        <button type="button" class="button" id="generate-all-categories">
+                            Generate All Categories
+                        </button>
+                        <span><?php echo esc_html($total_products); ?> products</span>
+                    </div>
+                    <div id="generation-progress"></div>
+                </div>
+
+                <!-- Debug Modal -->
+                <div id="whisky-debug-modal" class="whisky-modal">
+                    <div class="whisky-modal-content">
+                        <span class="whisky-modal-close">&times;</span>
+                        <h2>AI Generation Progress</h2>
+                        <div class="whisky-spinner-container">
+                            <div class="whisky-spinner"></div>
+                        </div>
+                        <div class="whisky-debug-content">
+                            <div class="debug-steps"></div>
+                            <div class="debug-response"></div>
+                        </div>
+                        <button type="button" class="button whisky-modal-close-btn" style="margin-top: 15px;">Close</button>
+                    </div>
                 </div>
             </div>
 
-            <form action="options.php" method="post">
-                <?php
-                settings_fields('whisky_ai_settings');
-                do_settings_sections('whisky_ai_settings');
-                submit_button();
-                ?>
-            </form>
-
-            <h2>Current Flavor Categories</h2>
-            <div class="flavor-categories-list" style="background: #fff; padding: 20px; border: 1px solid #ccc; border-radius: 4px;">
-                <table class="widefat">
-                    <thead>
-                        <tr>
-                            <th>Category Name</th>
-                            <th>Category ID</th>
-                        </tr>
-                    </thead>
-                    <tbody>
-                        <?php 
-                        $categories = $this->get_default_categories();
-                        foreach ($categories as $name => $id): 
+            <div id="settings" class="tab-content">
+                <div class="whisky-card">
+                    <form action="options.php" method="post">
+                        <?php
+                        settings_fields('whisky_ai_settings');
+                        do_settings_sections('whisky_ai_settings');
+                        submit_button();
                         ?>
-                        <tr>
-                            <td><?php echo esc_html($name); ?></td>
-                            <td><?php echo esc_html($id); ?></td>
-                        </tr>
-                        <?php endforeach; ?>
-                    </tbody>
-                </table>
+                    </form>
+                </div>
             </div>
 
-            <hr>
-
-            <h2>Generate Descriptions</h2>
-            <div class="generate-buttons" style="display: flex; gap: 10px;">
-                <button type="button" class="button button-primary" id="generate-descriptions">
-                    Generate All Descriptions
-                </button>
-                <button type="button" class="button button-secondary" id="generate-remaining">
-                    Generate Remaining Only
-                </button>
+            <div id="categories" class="tab-content">
+                <div class="whisky-card">
+                    <h2>Current Flavor Categories</h2>
+                    <div class="flavor-categories-list">
+                        <table class="widefat">
+                            <thead>
+                                <tr>
+                                    <th>Category Name</th>
+                                    <th>Category ID</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                <?php 
+                                $categories = $this->get_default_categories();
+                                foreach ($categories as $name => $id): 
+                                ?>
+                                <tr>
+                                    <td><?php echo esc_html($name); ?></td>
+                                    <td><?php echo esc_html($id); ?></td>
+                                </tr>
+                                <?php endforeach; ?>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
             </div>
-            <div id="generation-progress"></div>
         </div>
-
-        <script>
-        jQuery(document).ready(function($) {
-            // Load statistics on page load
-            loadStats();
-
-            function loadStats() {
-                $.ajax({
-                    url: ajaxurl,
-                    type: 'POST',
-                    data: {
-                        action: 'get_whisky_stats',
-                        nonce: '<?php echo wp_create_nonce('whisky_ai_nonce'); ?>'
-                    },
-                    success: function(response) {
-                        if (response.success) {
-                            const stats = response.data;
-                            const percentage = Math.round((stats.updated / stats.total) * 100) || 0;
-                            
-                            $('#whisky-stats').html(`
-                                <div class="stats-grid">
-                                    <div class="stat-box">
-                                        <h3>Total Products</h3>
-                                        <p style="font-size: 24px; margin: 0;">${stats.total}</p>
-                                    </div>
-                                    <div class="stat-box">
-                                        <h3>Updated Products</h3>
-                                        <p style="font-size: 24px; margin: 0;">${stats.updated}</p>
-                                    </div>
-                                    <div class="stat-box">
-                                        <h3>Remaining</h3>
-                                        <p style="font-size: 24px; margin: 0;">${stats.remaining}</p>
-                                    </div>
-                                </div>
-                                <div class="progress-bar">
-                                    <div style="width: ${percentage}%;"></div>
-                                </div>
-                                <p style="text-align: center; margin-top: 5px;">${percentage}% Complete</p>
-                            `);
-                        } else {
-                            $('#whisky-stats').html('<p class="error">Error loading statistics</p>');
-                        }
-                    },
-                    error: function() {
-                        $('#whisky-stats').html('<p class="error">Error loading statistics</p>');
-                    }
-                });
-            }
-
-            // Refresh stats every 30 seconds
-            setInterval(loadStats, 30000);
-        });
-        </script>
         <?php
     }
 
@@ -607,24 +789,33 @@ class WhiskyAI {
         
         ?>
         <div class="whisky-ai-status">
-            <div class="status-item <?php echo $desc_tag ? 'processed' : 'not-processed'; ?>" style="margin-bottom: 10px;">
-                <p><strong>Description Status:</strong> <?php echo $desc_tag ? 'Generated' : 'Not Generated'; ?></p>
-                <button type="button" 
-                        class="button button-primary generate-single-description" 
-                        data-product-id="<?php echo esc_attr($post->ID); ?>"
-                        style="width: 100%;">
-                    Generate Description
-                </button>
-            </div>
-            
-            <div class="status-item <?php echo $cat_tag ? 'processed' : 'not-processed'; ?>">
-                <p><strong>Categories Status:</strong> <?php echo $cat_tag ? 'Generated' : 'Not Generated'; ?></p>
-                <button type="button" 
-                        class="button button-primary generate-single-categories" 
-                        data-product-id="<?php echo esc_attr($post->ID); ?>"
-                        style="width: 100%;">
-                    Generate Categories
-                </button>
+            <button type="button" 
+                    class="button button-primary generate-all-single" 
+                    data-product-id="<?php echo esc_attr($post->ID); ?>"
+                    style="width: 100%; margin-bottom: 15px;">
+                Update All
+            </button>
+
+            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 10px;">
+                <div class="status-item <?php echo $desc_tag ? 'processed' : 'not-processed'; ?>">
+                    <p><strong>Description:</strong> <?php echo $desc_tag ? 'Done' : 'Pending'; ?></p>
+                    <button type="button" 
+                            class="button button-secondary button-small generate-single-description" 
+                            data-product-id="<?php echo esc_attr($post->ID); ?>"
+                            style="width: 100%;">
+                        Generate
+                    </button>
+                </div>
+                
+                <div class="status-item <?php echo $cat_tag ? 'processed' : 'not-processed'; ?>">
+                    <p><strong>Categories:</strong> <?php echo $cat_tag ? 'Done' : 'Pending'; ?></p>
+                    <button type="button" 
+                            class="button button-secondary button-small generate-single-categories" 
+                            data-product-id="<?php echo esc_attr($post->ID); ?>"
+                            style="width: 100%;">
+                        Generate
+                    </button>
+                </div>
             </div>
         </div>
         <div class="single-product-status"></div>
@@ -634,10 +825,14 @@ class WhiskyAI {
             <div class="whisky-modal-content">
                 <span class="whisky-modal-close">&times;</span>
                 <h2>AI Generation Progress</h2>
+                <div class="whisky-spinner-container">
+                    <div class="whisky-spinner"></div>
+                </div>
                 <div class="whisky-debug-content">
                     <div class="debug-steps"></div>
                     <div class="debug-response"></div>
                 </div>
+                <button type="button" class="button whisky-modal-close-btn" style="margin-top: 15px;">Close</button>
             </div>
         </div>
 
@@ -730,214 +925,47 @@ class WhiskyAI {
         </style>
         <?php
     }
-
-    public function generate_descriptions() {
-        check_ajax_referer('whisky_ai_nonce', 'nonce');
-        
-        if (!current_user_can('manage_options')) {
-            wp_send_json_error('Insufficient permissions');
-            return;
-        }
-
-        $product_ids = isset($_POST['product_ids']) ? array_map('intval', (array)$_POST['product_ids']) : array();
-        
-        if (empty($product_ids)) {
-            wp_send_json_error('No product IDs provided');
-            return;
-        }
-
-        $debug_info = array();
-        $success = true;
-        $errors = array();
-
-        foreach ($product_ids as $product_id) {
-            try {
-                $product = wc_get_product($product_id);
-                if (!$product) {
-                    throw new Exception("Product not found: " . $product_id);
-                }
-
-                // Get product name and current description
-                $product_name = $product->get_name();
-                $current_description = $product->get_description();
-
-                // Prepare the prompt
-                $system_prompt = $this->options['description_prompt'] ?: $this->default_description_prompt;
-                $user_prompt = "Product Name: {$product_name}\nCurrent Description: {$current_description}";
-
-                // Call OpenAI API
-                $openai = new OpenAI($this->options['openai_api_key']);
-                $response = $openai->chat([
-                    'model' => 'gpt-4',
-                    'messages' => [
-                        ['role' => 'system', 'content' => $system_prompt],
-                        ['role' => 'user', 'content' => $user_prompt]
-                    ],
-                    'temperature' => 0.7,
-                    'max_tokens' => 1000
-                ]);
-
-                if (isset($response['error'])) {
-                    throw new Exception("OpenAI API Error: " . $response['error']['message']);
-                }
-
-                $new_description = $response['choices'][0]['message']['content'];
-
-                // Update product description
-                $product->set_description($new_description);
-                $product->save();
-
-                // Add the DescUpdated tag
-                wp_set_object_terms($product_id, 'DescUpdated', 'product_tag', true);
-
-                $debug_info[$product_id] = array(
-                    'success' => true,
-                    'original_description' => $current_description,
-                    'new_description' => $new_description,
-                    'openai_response' => $response
-                );
-
-            } catch (Exception $e) {
-                $success = false;
-                $errors[$product_id] = $e->getMessage();
-                $debug_info[$product_id] = array(
-                    'success' => false,
-                    'error' => $e->getMessage()
-                );
-            }
-        }
-
-        if ($success) {
-            wp_send_json_success(array(
-                'message' => 'Descriptions updated successfully',
-                'debug' => $debug_info
-            ));
-        } else {
-            wp_send_json_error(array(
-                'message' => 'Some descriptions failed to update',
-                'errors' => $errors,
-                'debug' => $debug_info
-            ));
-        }
+    public function add_settings_link($links) {
+        $settings_link = '<a href="admin.php?page=whisky-ai">' . __('Settings') . '</a>';
+        array_unshift($links, $settings_link);
+        return $links;
     }
 
-    public function generate_categories_endpoint() {
-        check_ajax_referer('whisky_ai_nonce', 'nonce');
-        
-        if (!current_user_can('manage_options')) {
-            wp_send_json_error('Insufficient permissions');
-            return;
+
+    public function fix_all_missing() {
+         check_ajax_referer('whisky_ai_nonce', 'nonce');
+     
+         $desc_errors = 0;
+         $cat_errors = 0;
+     
+         // Find and process products missing descriptions
+         $missing_desc_args = array(
+             'post_type' => 'product', 'posts_per_page' => -1, 'fields' => 'ids',
+            'tax_query' => [['taxonomy' => 'product_tag', 'field' => 'name', 'terms' => 'DescUpdated',
+      'operator' => 'NOT IN']]
+        );
+        $missing_desc_products = get_posts($missing_desc_args);
+        if (!empty($missing_desc_products)) {
+            $desc_result = $this->core->process_descriptions(array_map('intval', $missing_desc_products));
+            $desc_errors = count($desc_result['errors']);
         }
-
-        $product_ids = isset($_POST['product_ids']) ? array_map('intval', (array)$_POST['product_ids']) : array();
-        
-        if (empty($product_ids)) {
-            wp_send_json_error('No product IDs provided');
-            return;
-        }
-
-        $debug_info = array();
-        $success = true;
-        $errors = array();
-
-        foreach ($product_ids as $product_id) {
-            try {
-                $product = wc_get_product($product_id);
-                if (!$product) {
-                    throw new Exception("Product not found: " . $product_id);
-                }
-
-                // Get product name and current description
-                $product_name = $product->get_name();
-                $current_description = $product->get_description();
-
-                // Get available categories
-                $categories = $this->get_default_categories();
-                $category_list = implode(", ", array_keys($categories));
-
-                // Prepare the prompt
-                $system_prompt = $this->options['category_prompt'] ?: $this->default_category_prompt;
-                $system_prompt = str_replace('[CATEGORIES]', $category_list, $system_prompt);
-                
-                $user_prompt = "Product Name: {$product_name}\nDescription: {$current_description}";
-
-                // Call OpenAI API
-                $openai = new OpenAI($this->options['openai_api_key']);
-                $response = $openai->chat([
-                    'model' => 'gpt-4',
-                    'messages' => [
-                        ['role' => 'system', 'content' => $system_prompt],
-                        ['role' => 'user', 'content' => $user_prompt]
-                    ],
-                    'temperature' => 0.7,
-                    'max_tokens' => 500
-                ]);
-
-                if (isset($response['error'])) {
-                    throw new Exception("OpenAI API Error: " . $response['error']['message']);
-                }
-
-                $ai_response = $response['choices'][0]['message']['content'];
-                
-                // Parse the response to get categories
-                $detected_categories = array();
-                foreach ($categories as $category => $subcategories) {
-                    if (stripos($ai_response, $category) !== false) {
-                        $detected_categories[] = $category;
-                        // Check for subcategories
-                        foreach ($subcategories as $subcategory) {
-                            if (stripos($ai_response, $subcategory) !== false) {
-                                $detected_categories[] = $subcategory;
-                            }
-                        }
-                    }
-                }
-
-                // Get current categories
-                $current_terms = wp_get_object_terms($product_id, 'product_cat', array('fields' => 'names'));
-
-                // Update product categories
-                $term_ids = array();
-                foreach ($detected_categories as $category_name) {
-                    $term = get_term_by('name', $category_name, 'product_cat');
-                    if ($term) {
-                        $term_ids[] = $term->term_id;
-                    }
-                }
-                wp_set_object_terms($product_id, $term_ids, 'product_cat');
-
-                // Add the CatUpdated tag
-                wp_set_object_terms($product_id, 'CatUpdated', 'product_tag', true);
-
-                $debug_info[$product_id] = array(
-                    'success' => true,
-                    'original_categories' => $current_terms,
-                    'detected_categories' => $detected_categories,
-                    'ai_response' => $ai_response,
-                    'openai_response' => $response
-                );
-
-            } catch (Exception $e) {
-                $success = false;
-                $errors[$product_id] = $e->getMessage();
-                $debug_info[$product_id] = array(
-                    'success' => false,
-                    'error' => $e->getMessage()
-                );
-            }
-        }
-
-        if ($success) {
-            wp_send_json_success(array(
-                'message' => 'Categories updated successfully',
-                'debug' => $debug_info
-            ));
+    
+        // Find and process products missing categories
+        $missing_cat_args = array(
+            'post_type' => 'product', 'posts_per_page' => -1, 'fields' => 'ids',
+            'tax_query' => [['taxonomy' => 'product_tag', 'field' => 'name', 'terms' => 'CatUpdated',
+      'operator' => 'NOT IN']]
+        );
+        $missing_cat_products = get_posts($missing_cat_args);
+        if (!empty($missing_cat_products)) {
+            $cat_result = $this->core->process_categories(array_map('intval', $missing_cat_products));
+            $cat_errors = count($cat_result['errors']);
+        }    
+        if ($desc_errors === 0 && $cat_errors === 0) {
+            wp_send_json_success('All missing descriptions and categories have been generated.');
         } else {
-            wp_send_json_error(array(
-                'message' => 'Some categories failed to update',
-                'errors' => $errors,
-                'debug' => $debug_info
-            ));
+            wp_send_json_error("Processing complete with {$desc_errors} description errors and {$cat_errors}
+      category errors.");
         }
     }
 }
