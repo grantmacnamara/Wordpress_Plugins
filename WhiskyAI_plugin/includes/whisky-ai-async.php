@@ -184,6 +184,8 @@ class WhiskyAIAsyncTask {
                 return;
             }
             
+            error_log("[WhiskyAI] Raw categories response: " . substr($categories_text, 0, 200));
+            
             // Parse categories with synonym matching
             $category_ids = $this->parse_categories($categories_text);
             error_log("[WhiskyAI] Parsed " . count($category_ids) . " categories for product {$product_id}");
@@ -337,9 +339,13 @@ class WhiskyAIAsyncTask {
     }
 
     /**
-     * Parse categories with synonym matching
+     * Parse categories with synonym matching and detailed logging
      */
     private function parse_categories($categories_text) {
+        // Log raw API response
+        error_log("[WhiskyAI] Raw API response for category parsing: " . json_encode($categories_text));
+        error_log("[WhiskyAI] Response length: " . strlen($categories_text) . " bytes");
+        
         $category_synonyms = array(
             'Floral' => array('Floral', 'Flower', 'Flowers', 'Flowerery'),
             'Fruity' => array('Fruity', 'Fruit', 'Fruits'),
@@ -355,16 +361,22 @@ class WhiskyAIAsyncTask {
         
         $category_ids = array();
         $lines = explode("\n", $categories_text);
+        error_log("[WhiskyAI] Split into " . count($lines) . " lines");
         
-        foreach ($lines as $line) {
+        foreach ($lines as $idx => $line) {
+            $original_line = $line;
             $category = trim($line, " -\t\n\r ");
             
+            error_log("[WhiskyAI] Line $idx: Original='" . json_encode($original_line) . "' Trimmed='" . json_encode($category) . "'");
+            
             if (empty($category)) {
+                error_log("[WhiskyAI]   -> Skipping empty line");
                 continue;
             }
             
             // Try exact match
             if (isset($this->flavor_categories[$category])) {
+                error_log("[WhiskyAI]   -> MATCHED (exact): '$category' => " . $this->flavor_categories[$category]);
                 $category_ids[] = $this->flavor_categories[$category];
                 continue;
             }
@@ -373,6 +385,7 @@ class WhiskyAIAsyncTask {
             $found = false;
             foreach ($this->flavor_categories as $cat_name => $cat_id) {
                 if (strtolower($category) === strtolower($cat_name)) {
+                    error_log("[WhiskyAI]   -> MATCHED (case-insensitive): '$category' => '$cat_name' (ID: $cat_id)");
                     $category_ids[] = $cat_id;
                     $found = true;
                     break;
@@ -387,14 +400,20 @@ class WhiskyAIAsyncTask {
             foreach ($category_synonyms as $main_category => $synonyms) {
                 foreach ($synonyms as $synonym) {
                     if (strtolower($category) === strtolower($synonym)) {
+                        error_log("[WhiskyAI]   -> MATCHED (synonym): '$category' => '$main_category' (ID: " . $this->flavor_categories[$main_category] . ")");
                         $category_ids[] = $this->flavor_categories[$main_category];
                         $found = true;
                         break 2;
                     }
                 }
             }
+            
+            if (!$found) {
+                error_log("[WhiskyAI]   -> NOT MATCHED: '$category'");
+            }
         }
         
+        error_log("[WhiskyAI] Final parsed categories: " . json_encode(array_unique($category_ids)));
         return array_unique($category_ids);
     }
 
