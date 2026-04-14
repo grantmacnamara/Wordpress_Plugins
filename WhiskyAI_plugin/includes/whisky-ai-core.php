@@ -14,17 +14,17 @@ class WhiskyAIException extends Exception {
 }
 
 class WhiskyAICore {
-    private $openai_key;
+    private $gemini_key;
     private $flavor_categories;
     private $options;
-    private $openai;
+    private $gemini;
 
     public function __construct() {
         $this->options = get_option('whisky_ai_settings');
-        $this->openai_key = $this->options['openai_api_key'] ?? '';
+        $this->gemini_key = $this->options['gemini_api_key'] ?? '';
 
-        if (!empty($this->openai_key)) {
-            $this->openai = new OpenAI($this->openai_key);
+        if (!empty($this->gemini_key)) {
+            $this->gemini = new Gemini($this->gemini_key);
         }
         
         // Set the correct flavor categories
@@ -58,8 +58,8 @@ class WhiskyAICore {
     public function generate_descriptions() {
         check_ajax_referer('whisky_ai_nonce', 'nonce');
 
-        if (empty($this->openai_key) || !$this->openai) {
-            wp_send_json_error(array('message' => 'OpenAI API key is not set or invalid.'));
+        if (empty($this->gemini_key) || !$this->gemini) {
+            wp_send_json_error(array('message' => 'Gemini API key is not set or invalid.'));
             return;
         }
 
@@ -128,8 +128,8 @@ class WhiskyAICore {
     public function generate_categories_endpoint() {
         check_ajax_referer('whisky_ai_nonce', 'nonce');
 
-        if (empty($this->openai_key) || !$this->openai) {
-            wp_send_json_error(array('message' => 'OpenAI API key is not set or invalid.'));
+        if (empty($this->gemini_key) || !$this->gemini) {
+            wp_send_json_error(array('message' => 'Gemini API key is not set or invalid.'));
             return;
         }
 
@@ -208,7 +208,7 @@ class WhiskyAICore {
 
     private function generate_description($product_name) {
         $request_data = array(
-            'model' => $this->options['openai_model'] ?? 'gpt-4o-mini',
+            'model' => $this->options['gemini_model'] ?? 'gemini-1.5-flash',
             'messages' => array(
                 array(
                     'role' => 'system',
@@ -221,11 +221,11 @@ class WhiskyAICore {
             )
         );
 
-        $response = $this->openai->chat($request_data);
+        $response = $this->gemini->chat($request_data);
 
         if (isset($response['error'])) {
             throw new WhiskyAIException(
-                'OpenAI API Error: ' . $response['error']['message'],
+                'Gemini API Error: ' . $response['error']['message'],
                 0,
                 null,
                 array('api_request' => $request_data, 'api_response' => $response)
@@ -234,7 +234,7 @@ class WhiskyAICore {
 
         if (empty($response['choices'][0]['message']['content'])) {
             throw new WhiskyAIException(
-                'No description generated from OpenAI',
+                'No description generated from Gemini',
                 0,
                 null,
                 array('api_request' => $request_data, 'api_response' => $response)
@@ -249,7 +249,7 @@ class WhiskyAICore {
 
     private function generate_categories($product_name) {
         $request_data = array(
-            'model' => $this->options['openai_model'] ?? 'gpt-3.5-turbo',
+            'model' => $this->options['gemini_model'] ?? 'gemini-1.5-flash',
             'messages' => array(
                 array(
                     'role' => 'system',
@@ -262,11 +262,11 @@ class WhiskyAICore {
             )
         );
 
-        $response = $this->openai->chat($request_data);
+        $response = $this->gemini->chat($request_data);
 
         if (isset($response['error'])) {
             throw new WhiskyAIException(
-                'OpenAI API Error: ' . $response['error']['message'],
+                'Gemini API Error: ' . $response['error']['message'],
                 0,
                 null,
                 array('api_request' => $request_data, 'api_response' => $response)
@@ -275,7 +275,7 @@ class WhiskyAICore {
 
         if (empty($response['choices'][0]['message']['content'])) {
             throw new WhiskyAIException(
-                'No categories generated from OpenAI',
+                'No categories generated from Gemini',
                 0,
                 null,
                 array('api_request' => $request_data, 'api_response' => $response)
@@ -291,7 +291,8 @@ class WhiskyAICore {
         foreach ($lines as $line) {
             // Clean up the line
             $category = trim($line, " -	
- ");
+
+ ");
             if (isset($this->flavor_categories[$category])) {
                 $category_ids[] = $this->flavor_categories[$category];
             }

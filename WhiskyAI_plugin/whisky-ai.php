@@ -2,8 +2,8 @@
 /**
  * Plugin Name: WhiskyAI
  * Plugin URI: 
- * Description: This plugin uses OpenAI to generate whisky reviews.
- * Version: 1.2.5
+ * Description: This plugin uses Google Gemini to generate whisky reviews.
+ * Version: 1.3.0
  * Requires at least: 5.2
  * Requires PHP: 7.2
  * Author: Grant Macnamara
@@ -20,7 +20,7 @@ if (!defined('ABSPATH')) {
 }
 
 // Include required files
-require_once plugin_dir_path(__FILE__) . 'includes/class-openai.php';
+require_once plugin_dir_path(__FILE__) . 'includes/class-gemini.php';
 
 // Plugin Class
 class WhiskyAI {
@@ -41,7 +41,7 @@ class WhiskyAI {
         add_action('admin_enqueue_scripts', array($this, 'enqueue_admin_scripts'));
         add_action('wp_ajax_get_whisky_products', array($this, 'get_whisky_products'));
         add_action('wp_ajax_get_whisky_stats', array($this, 'get_whisky_stats'));
-        add_action('wp_ajax_verify_openai_api', array($this, 'verify_openai_api'));
+        add_action('wp_ajax_verify_gemini_api', array($this, 'verify_gemini_api'));
         add_action('wp_ajax_fix_all_missing', array($this, 'fix_all_missing'));
         
         // Add settings link to plugin page
@@ -57,10 +57,10 @@ class WhiskyAI {
         
         // Get options with defaults
         $this->options = get_option('whisky_ai_settings', array(
-            'openai_api_key' => '',
+            'gemini_api_key' => '',
             'description_prompt' => $this->default_description_prompt,
             'category_prompt' => $this->default_category_prompt,
-            'openai_model' => 'gpt-4o-mini' // Default model
+            'gemini_model' => 'gemini-3.1-flash' // Default model
         ));
         
         $this->flavor_categories = get_option('whisky_ai_categories', $this->get_default_categories());
@@ -331,16 +331,16 @@ class WhiskyAI {
         );
 
         add_settings_field(
-            'openai_api_key',
-            'OpenAI API Key',
+            'gemini_api_key',
+            'Gemini API Key',
             array($this, 'render_api_key_field'),
             'whisky_ai_settings',
             'whisky_ai_main_section'
         );
 
         add_settings_field(
-            'openai_model',
-            'OpenAI Model',
+            'gemini_model',
+            'Gemini Model',
             array($this, 'render_model_field'),
             'whisky_ai_settings',
             'whisky_ai_main_section'
@@ -374,12 +374,12 @@ class WhiskyAI {
     public function sanitize_settings($input) {
         $sanitized = array();
         
-        if (isset($input['openai_api_key'])) {
-            $sanitized['openai_api_key'] = sanitize_text_field($input['openai_api_key']);
+        if (isset($input['gemini_api_key'])) {
+            $sanitized['gemini_api_key'] = sanitize_text_field($input['gemini_api_key']);
         }
 
-        if (isset($input['openai_model'])) {
-            $sanitized['openai_model'] = sanitize_text_field($input['openai_model']);
+        if (isset($input['gemini_model'])) {
+            $sanitized['gemini_model'] = sanitize_text_field($input['gemini_model']);
         }
         
         if (isset($input['description_prompt'])) {
@@ -428,7 +428,7 @@ class WhiskyAI {
     }
 
     public function render_api_key_field() {
-        $api_key = isset($this->options['openai_api_key']) ? $this->options['openai_api_key'] : '';
+        $api_key = isset($this->options['gemini_api_key']) ? $this->options['gemini_api_key'] : '';
         $is_verified = get_option('whisky_ai_api_verified', false);
         
         if ($is_verified) {
@@ -443,10 +443,10 @@ class WhiskyAI {
         }
         
         echo '<input type="password" 
-                     name="whisky_ai_settings[openai_api_key]" 
+                     name="whisky_ai_settings[gemini_api_key]" 
                      value="' . esc_attr($api_key) . '" 
                      class="regular-text"
-                     id="openai-api-key">';
+                     id="gemini-api-key">';
         echo '<button type="button" class="button button-secondary" id="verify-api-key" style="margin-left: 10px;">Verify API Key</button>';
         echo '<span class="spinner" style="float: none; margin-top: 0;"></span>';
         echo '<div class="api-key-message"></div>';
@@ -459,7 +459,7 @@ class WhiskyAI {
                 const button = $(this);
                 const spinner = button.next('.spinner');
                 const messageDiv = $('.api-key-message');
-                const apiKey = $('#openai-api-key').val();
+                const apiKey = $('#gemini-api-key').val();
 
                 if (!apiKey) {
                     messageDiv.html('<div class="error-message" style="color: #dc3232; margin-top: 5px;">Please enter an API key</div>');
@@ -475,7 +475,7 @@ class WhiskyAI {
                     url: '<?php echo admin_url('admin-ajax.php'); ?>',
                     type: 'POST',
                     data: {
-                        action: 'verify_openai_api',
+                        action: 'verify_gemini_api',
                         nonce: '<?php echo wp_create_nonce('whisky_ai_verify_nonce'); ?>',
                         api_key: apiKey
                     },
@@ -511,18 +511,24 @@ class WhiskyAI {
     }
 
     public function render_model_field() {
-        $model = isset($this->options['openai_model']) ? $this->options['openai_model'] : 'gpt-4o-mini';
-        $models = array('gpt-4o-mini', 'gpt-3.5-turbo', 'gpt-4', 'gpt-4-turbo');
+        $model = isset($this->options['gemini_model']) ? $this->options['gemini_model'] : 'gemini-3.1-flash';
+        $models = array(
+            'gemini-3.1-pro' => 'Gemini 3.1 Pro (Latest, Most Capable)',
+            'gemini-3-pro' => 'Gemini 3 Pro',
+            'gemini-3.1-flash' => 'Gemini 3.1 Flash (Recommended)',
+            'gemini-3-flash' => 'Gemini 3 Flash',
+            'gemini-2.5-pro' => 'Gemini 2.5 Pro'
+        );
         
-        echo '<select name="whisky_ai_settings[openai_model]">';
-        foreach ($models as $m) {
-            echo '<option value="' . esc_attr($m) . '" ' . selected($model, $m, false) . '>' . esc_html($m) . '</option>';
+        echo '<select name="whisky_ai_settings[gemini_model]">';
+        foreach ($models as $value => $label) {
+            echo '<option value="' . esc_attr($value) . '" ' . selected($model, $value, false) . '>' . esc_html($label) . '</option>';
         }
         echo '</select>';
-        echo '<p class="description">Select the OpenAI model to use for generating content.</p>';
+        echo '<p class="description">Select the Gemini model to use for generating content. All models support up to 1,048,576 input tokens with January 2025 knowledge cutoff.</p>';
     }
 
-    public function verify_openai_api() {
+    public function verify_gemini_api() {
         if (!check_ajax_referer('whisky_ai_verify_nonce', 'nonce', false)) {
             wp_send_json_error('Invalid nonce. Please refresh the page and try again.');
             return;
@@ -540,24 +546,33 @@ class WhiskyAI {
         
         $api_key = sanitize_text_field($_POST['api_key']);
         
-        error_log('Attempting to verify OpenAI API key...');
+        error_log('Attempting to verify Gemini API key...');
         
         $args = array(
             'headers' => array(
-                'Authorization' => 'Bearer ' . $api_key,
                 'Content-Type' => 'application/json',
             ),
+            'body' => json_encode(array(
+                'contents' => array(
+                    array(
+                        'parts' => array(
+                            array('text' => 'Hello')
+                        )
+                    )
+                )
+            )),
             'timeout' => 30,
             'sslverify' => true,
             'user-agent' => 'WordPress/' . get_bloginfo('version') . '; ' . get_bloginfo('url')
         );
 
-        error_log('Making request to OpenAI API...');
+        error_log('Making request to Gemini API...');
         
-        $response = wp_remote_get('https://api.openai.com/v1/models', $args);
+        $url = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=' . $api_key;
+        $response = wp_remote_post($url, $args);
 
         if (is_wp_error($response)) {
-            error_log('OpenAI API Error: ' . $response->get_error_message());
+            error_log('Gemini API Error: ' . $response->get_error_message());
             wp_send_json_error('Connection failed: ' . $response->get_error_message());
             return;
         }
@@ -565,8 +580,8 @@ class WhiskyAI {
         $response_code = wp_remote_retrieve_response_code($response);
         $response_body = wp_remote_retrieve_body($response);
 
-        error_log('OpenAI API Response Code: ' . $response_code);
-        error_log('OpenAI API Response Body: ' . $response_body);
+        error_log('Gemini API Response Code: ' . $response_code);
+        error_log('Gemini API Response Body: ' . $response_body);
 
         if ($response_code !== 200) {
             $body = json_decode($response_body, true);
@@ -580,7 +595,7 @@ class WhiskyAI {
         
         // Update the API key in settings
         $options = get_option('whisky_ai_settings', array());
-        $options['openai_api_key'] = $api_key;
+        $options['gemini_api_key'] = $api_key;
         update_option('whisky_ai_settings', $options);
 
         wp_send_json_success('API key verified successfully');
