@@ -23,7 +23,7 @@ jQuery(document).ready(function($) {
         modal.css('display', 'block');
         debugSteps.empty();
         debugResponse.empty();
-        debugContent.hide();
+        debugContent.show();  // Changed: Show content immediately
         spinner.show();
 
         button.prop('disabled', true).text('Generating...');
@@ -53,7 +53,6 @@ jQuery(document).ready(function($) {
                     console.log('[WhiskyAI] Description generated successfully');
                     addDebugStep('Reloading page...', 'info');
                     setTimeout(() => {
-                        // Auto-close modal and reload
                         modal.css('display', 'none');
                         location.reload();
                     }, 1000);
@@ -75,7 +74,6 @@ jQuery(document).ready(function($) {
                 addDebugStep('Request complete (Status: ' + textStatus + ')', 'info');
                 console.log('[WhiskyAI] Request complete:', textStatus);
                 spinner.hide();
-                debugContent.show();
                 if (textStatus !== 'success') {
                     button.prop('disabled', false).text('Generate');
                 }
@@ -99,6 +97,8 @@ jQuery(document).ready(function($) {
         debugSteps.empty();
         debugResponse.empty();
         debugContent.hide();
+        spinner.show();
+show();  // Changed: Show content immediately
         spinner.show();
 
         button.prop('disabled', true).text('Generating...');
@@ -137,6 +137,10 @@ jQuery(document).ready(function($) {
                     addDebugStep('Error: ' + errorMessage, 'error');
                     console.error('[WhiskyAI] API error:', response.data);
                     if (response.data && response.data.errors) {
+                        addDebugStep('Error details:', 'error');
+                        $.each(response.data.errors, function(productId, error) {
+                            addDebugStep('  Product ' + productId + ': ' + error, 'error');
+                        });
                         debugResponse.text(JSON.stringify(response.data.errors, null, 2));
                     }
                 }
@@ -149,10 +153,7 @@ jQuery(document).ready(function($) {
             complete: function(jqXHR, textStatus) {
                 addDebugStep('Request complete (Status: ' + textStatus + ')', 'info');
                 console.log('[WhiskyAI] Request complete:', textStatus);
-                spinner.hide();
-                debugContent.show();
-                if (textStatus !== 'success') {
-                    button.prop('disabled', false).text('Generate');
+                spinner.hidedisabled', false).text('Generate');
                 }
             }
         });
@@ -195,7 +196,7 @@ jQuery(document).ready(function($) {
         // Show modal and prepare for generation
         modal.css('display', 'block');
         debugSteps.empty();
-        debugContent.hide();
+        debugContent.show();  // Changed: Show content immediately
         spinner.show();
         
         button.prop('disabled', true).text('Updating...');
@@ -272,10 +273,9 @@ jQuery(document).ready(function($) {
                 errorMessage = response.data;
             }
             addDebugStep('Error: ' + errorMessage, 'error');
-        })
+        })// Note: debugContent already shown, no need to show again
         .always(function(response, status) {
             spinner.hide();
-            debugContent.show();
             // Re-enable buttons only on failure
             if (status === 'error' || (response && response.success === false)) {
                 button.prop('disabled', false).text('Update All');
@@ -406,7 +406,7 @@ jQuery(document).ready(function($) {
         const debugContent = modal.find('.whisky-debug-content');
         const allButtons = $('#generate-all-descriptions, #generate-remaining-descriptions, #generate-all-categories, #generate-remaining-categories, #fix-all-missing');
 
-        // Show modal and prepare for generation
+        // Show modalshow();  // Changed: Show content immediatelyepare for generation
         modal.css('display', 'block');
         debugSteps.empty();
         debugContent.hide();
@@ -449,7 +449,6 @@ jQuery(document).ready(function($) {
                     addDebugStep('Error fetching products: ' + (response.data || 'Could not fetch products.'), 'error');
                     console.error('[WhiskyAI] Error fetching products:', response.data);
                     spinner.hide();
-                    debugContent.show();
                     allButtons.prop('disabled', false);
                 }
             },
@@ -457,7 +456,6 @@ jQuery(document).ready(function($) {
                 console.error('[WhiskyAI] Error fetching products:', {status, error, xhr});
                 addDebugStep('Error fetching products: ' + error + ' (Status: ' + status + ')', 'error');
                 spinner.hide();
-                debugContent.show();
                 allButtons.prop('disabled', false);
             }
         });
