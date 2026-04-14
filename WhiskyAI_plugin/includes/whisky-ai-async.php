@@ -365,9 +365,11 @@ class WhiskyAIAsyncTask {
         
         foreach ($lines as $idx => $line) {
             $original_line = $line;
-            $category = trim($line, " -\t\n\r ");
+            // Remove common list prefixes: *, -, •, numbers with period/paren
+            $category = preg_replace('/^[\s*\-•\d.)\s]+/', '', $line);
+            $category = trim($category, " \t\n\r");
             
-            error_log("[WhiskyAI] Line $idx: Original='" . json_encode($original_line) . "' Trimmed='" . json_encode($category) . "'");
+            error_log("[WhiskyAI] Line $idx: Original=" . json_encode($original_line) . " Cleaned=" . json_encode($category));
             
             if (empty($category)) {
                 error_log("[WhiskyAI]   -> Skipping empty line");
