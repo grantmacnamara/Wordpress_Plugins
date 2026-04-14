@@ -94,6 +94,9 @@ class WhiskyAIAsyncTask {
             'is_complete' => !$is_processing && (!empty($success_time) || !empty($error))
         );
     }
+
+    /**
+     * Process a single product asynchronously
      * Called by scheduled event hook
      * 
      * @param int $product_id
