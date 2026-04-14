@@ -53,6 +53,7 @@ class WhiskyAICore {
         // Add AJAX handlers - these now queue async tasks instead of processing directly
         add_action('wp_ajax_generate_whisky_descriptions', array($this, 'queue_descriptions'));
         add_action('wp_ajax_generate_whisky_categories', array($this, 'queue_categories'));
+        add_action('wp_ajax_check_whisky_processing_status', array($this, 'check_processing_status'));
         
         // Register async task processor hook
         add_action('whisky_ai_process_async_task', array($this, 'process_async_task_hook'), 10, 2);
@@ -133,6 +134,25 @@ class WhiskyAICore {
         // Initialize the async task handler
         $async_handler = new WhiskyAIAsyncTask($this->gemini, $this->options, $this->flavor_categories);
         $async_handler->process_async_task($product_id, $task_type);
+    }
+
+    /**
+     * AJAX handler to check processing status of a product
+     * Frontend polls this to know when to refresh the page
+     */
+    public function check_processing_status() {
+        check_ajax_referer('whisky_ai_nonce', 'nonce');
+
+        $product_id = isset($_POST['product_id']) ? intval($_POST['product_id']) : 0;
+        $task_type = isset($_POST['task_type']) ? sanitize_text_field($_POST['task_type']) : 'category';
+
+        if (empty($product_id)) {
+            wp_send_json_error(array('message' => 'No product ID provided.'));
+            return;
+        }
+
+        $status = WhiskyAIAsyncTask::get_processing_status($product_id, $task_type);
+        wp_send_json_success($status);
     }
 
     /**

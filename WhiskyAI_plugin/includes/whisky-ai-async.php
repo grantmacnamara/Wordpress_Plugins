@@ -57,7 +57,43 @@ class WhiskyAIAsyncTask {
     }
 
     /**
-     * Process a single product asynchronously
+     * Check if a product is currently being processed
+     * Returns status info including whether it's done, failed, or still processing
+     * 
+     * @param int $product_id
+     * @param string $task_type
+     * @return array
+     */
+    public static function get_processing_status($product_id, $task_type = 'description') {
+        $cache_key_desc = self::TRANSIENT_PREFIX . 'desc_' . $product_id;
+        $cache_key_cat = self::TRANSIENT_PREFIX . 'cat_' . $product_id;
+        
+        // Check if still processing (transient exists)
+        $is_processing = false;
+        if ($task_type === 'description' && get_transient($cache_key_desc)) {
+            $is_processing = true;
+        } elseif ($task_type === 'category' && get_transient($cache_key_cat)) {
+            $is_processing = true;
+        }
+        
+        // Check for errors
+        $error = get_post_meta($product_id, '_whisky_ai_error_' . $task_type, true);
+        $error_time = get_post_meta($product_id, '_whisky_ai_error_time_' . $task_type, true);
+        
+        // Check for success
+        $success_time = get_post_meta($product_id, '_whisky_ai_last_' . $task_type, true);
+        
+        return array(
+            'product_id' => $product_id,
+            'task_type' => $task_type,
+            'is_processing' => $is_processing,
+            'has_error' => !empty($error),
+            'error_message' => $error,
+            'error_time' => $error_time,
+            'success_time' => $success_time,
+            'is_complete' => !$is_processing && (!empty($success_time) || !empty($error))
+        );
+    }
      * Called by scheduled event hook
      * 
      * @param int $product_id

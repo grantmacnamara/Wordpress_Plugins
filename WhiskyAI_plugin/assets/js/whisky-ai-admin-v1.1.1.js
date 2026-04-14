@@ -1,4 +1,82 @@
 jQuery(document).ready(function($) {
+    // Helper function to add debug steps
+    function addDebugStep(message, type = 'info') {
+        const timestamp = new Date().toLocaleTimeString('en-US', { 
+            hour12: false, 
+            hour: '2-digit', 
+            minute: '2-digit', 
+            second: '2-digit' 
+        });
+        const stepClass = 'debug-step-' + type;
+        $('#whisky-debug-modal .debug-steps').append(`
+            <div class="${stepClass}">
+                [${timestamp}] ${message}
+            </div>
+        `);
+        $('#whisky-debug-modal .debug-steps').scrollTop($('#whisky-debug-modal .debug-steps')[0].scrollHeight);
+    }
+
+    // Poll processing status until complete
+    function pollProcessingStatus(productId, taskType, modal, callback) {
+        let pollCount = 0;
+        let maxPolls = 180; // 3 minutes with 1-second intervals
+        
+        function checkStatus() {
+            pollCount++;
+            
+            $.ajax({
+                url: whiskyAiSettings.ajaxurl,
+                type: 'POST',
+                data: {
+                    action: 'check_whisky_processing_status',
+                    nonce: whiskyAiSettings.nonce,
+                    product_id: productId,
+                    task_type: taskType
+                },
+                success: function(response) {
+                    if (response.success) {
+                        const status = response.data;
+                        
+                        if (status.is_complete) {
+                            addDebugStep('Processing complete!', 'success');
+                            
+                            if (status.has_error) {
+                                addDebugStep('Error: ' + status.error_message, 'error');
+                                if (callback) callback(false, status.error_message);
+                            } else {
+                                addDebugStep('Successfully processed ' + taskType, 'success');
+                                if (callback) callback(true, status);
+                            }
+                            return; // Stop polling
+                        } else if (status.is_processing) {
+                            addDebugStep('Still processing... (' + pollCount + 's elapsed)', 'info');
+                            // Continue polling
+                            setTimeout(checkStatus, 1000);
+                        } else {
+                            // Not processing yet, may not have started
+                            addDebugStep('Waiting for background task to start...', 'info');
+                            setTimeout(checkStatus, 1000);
+                        }
+                    } else {
+                        addDebugStep('Status check failed', 'error');
+                        if (callback) callback(false, 'Status check failed');
+                    }
+                },
+                error: function(xhr, status, error) {
+                    addDebugStep('Status check error: ' + error, 'error');
+                    if (pollCount < maxPolls) {
+                        setTimeout(checkStatus, 1000);
+                    } else {
+                        if (callback) callback(false, 'Timeout waiting for processing');
+                    }
+                }
+            });
+        }
+        
+        // Start polling immediately
+        checkStatus();
+    }
+
     // Tab switching
     $('.nav-tab').on('click', function() {
         const tab = $(this).data('tab');
@@ -23,7 +101,7 @@ jQuery(document).ready(function($) {
         modal.css('display', 'block');
         debugSteps.empty();
         debugResponse.empty();
-        debugContent.show();  // Changed: Show content immediately
+        debugContent.show();  // Show content immediately
         spinner.show();
 
         button.prop('disabled', true).text('Generating...');
@@ -46,37 +124,40 @@ jQuery(document).ready(function($) {
             },
             success: function(response) {
                 console.log('[WhiskyAI] API response received:', response);
-                addDebugStep('API response received (Status: success)', 'info');
+                addDebugStep('Task queued successfully. Waiting for background processing...', 'info');
                 
                 if (response.success) {
-                    addDebugStep('Description generated: ' + response.data.results[productId].description.substring(0, 100) + '...', 'success');
-                    console.log('[WhiskyAI] Description generated successfully');
-                    addDebugStep('Reloading page...', 'info');
-                    setTimeout(() => {
-                        modal.css('display', 'none');
-                        location.reload();
-                    }, 1000);
+                    addDebugStep('Queued ' + response.data.queued_count + ' product(s) for processing', 'success');
+                    spinner.show();
+                    
+                    // Start polling for processing completion
+                    pollProcessingStatus(productId, 'description', modal, function(success, data) {
+                        spinner.hide();
+                        if (success) {
+                            addDebugStep('Refreshing page to show updates...', 'info');
+                            setTimeout(() => {
+                                modal.css('display', 'none');
+                                location.reload();
+                            }, 1500);
+                        } else {
+                            addDebugStep('Failed: ' + data, 'error');
+                            button.prop('disabled', false).text('Generate');
+                        }
+                    });
                 } else {
                     let errorMessage = (response.data && response.data.message) ? response.data.message : 'An unknown error occurred.';
                     addDebugStep('Error: ' + errorMessage, 'error');
                     console.error('[WhiskyAI] API error:', response.data);
-                    if (response.data && response.data.errors) {
-                        debugResponse.text(JSON.stringify(response.data.errors, null, 2));
-                    }
+                    button.prop('disabled', false).text('Generate');
+                    spinner.hide();
                 }
             },
             error: function(xhr, status, error) {
                 console.error('[WhiskyAI] AJAX error:', {status: status, error: error, xhr: xhr});
                 addDebugStep('AJAX error: ' + error + ' (Status: ' + status + ')', 'error');
                 debugResponse.text('Status Code: ' + xhr.status + '\nResponse:\n' + xhr.responseText);
-            },
-            complete: function(jqXHR, textStatus) {
-                addDebugStep('Request complete (Status: ' + textStatus + ')', 'info');
-                console.log('[WhiskyAI] Request complete:', textStatus);
+                button.prop('disabled', false).text('Generate');
                 spinner.hide();
-                if (textStatus !== 'success') {
-                    button.prop('disabled', false).text('Generate');
-                }
             }
         });
     });
@@ -96,9 +177,7 @@ jQuery(document).ready(function($) {
         modal.css('display', 'block');
         debugSteps.empty();
         debugResponse.empty();
-        debugContent.hide();
-        spinner.show();
-show();  // Changed: Show content immediately
+        debugContent.show();
         spinner.show();
 
         button.prop('disabled', true).text('Generating...');
@@ -121,42 +200,43 @@ show();  // Changed: Show content immediately
             },
             success: function(response) {
                 console.log('[WhiskyAI] API response received:', response);
-                addDebugStep('API response received (Status: success)', 'info');
+                addDebugStep('Task queued successfully. Waiting for background processing...', 'info');
                 
                 if (response.success) {
-                    const categories = response.data.results[productId].category_names || [];
-                    addDebugStep('Categories generated: ' + categories.join(', '), 'success');
-                    console.log('[WhiskyAI] Categories generated successfully:', categories);
-                    addDebugStep('Reloading page...', 'info');
-                    setTimeout(() => {
-                        modal.css('display', 'none');
-                        location.reload();
-                    }, 1000);
+                    addDebugStep('Queued ' + response.data.queued_count + ' product(s) for processing', 'success');
+                    spinner.show();
+                    
+                    // Start polling for processing completion
+                    pollProcessingStatus(productId, 'category', modal, function(success, data) {
+                        spinner.hide();
+                        if (success) {
+                            addDebugStep('Refreshing page to show category updates...', 'info');
+                            setTimeout(() => {
+                                modal.css('display', 'none');
+                                location.reload();
+                            }, 1500);
+                        } else {
+                            addDebugStep('Failed: ' + data, 'error');
+                            button.prop('disabled', false).text('Generate');
+                        }
+                    });
                 } else {
                     let errorMessage = (response.data && response.data.message) ? response.data.message : 'An unknown error occurred.';
                     addDebugStep('Error: ' + errorMessage, 'error');
                     console.error('[WhiskyAI] API error:', response.data);
-                    if (response.data && response.data.errors) {
-                        addDebugStep('Error details:', 'error');
-                        $.each(response.data.errors, function(productId, error) {
-                            addDebugStep('  Product ' + productId + ': ' + error, 'error');
-                        });
-                        debugResponse.text(JSON.stringify(response.data.errors, null, 2));
-                    }
+                    button.prop('disabled', false).text('Generate');
+                    spinner.hide();
                 }
             },
             error: function(xhr, status, error) {
                 console.error('[WhiskyAI] AJAX error:', {status: status, error: error, xhr: xhr});
                 addDebugStep('AJAX error: ' + error + ' (Status: ' + status + ')', 'error');
                 debugResponse.text('Status Code: ' + xhr.status + '\nResponse:\n' + xhr.responseText);
-            },
-            complete: function(jqXHR, textStatus) {
-                addDebugStep('Request complete (Status: ' + textStatus + ')', 'info');
-                console.log('[WhiskyAI] Request complete:', textStatus);
-                spinner.hidedisabled', false).text('Generate');
-                }
+                button.prop('disabled', false).text('Generate');
+                spinner.hide();
             }
         });
+    });
     });
                     modal.css('display', 'none');
                     location.reload();
@@ -295,21 +375,6 @@ show();  // Changed: Show content immediately
             $('.whisky-modal').css('display', 'none');
         }
     });
-
-    function addDebugStep(message, type = 'info') {
-        const timestamp = new Date().toLocaleTimeString('en-US', { hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit' });
-        const fullMessage = '[' + timestamp + '] ' + message;
-        const debugSteps = $('.debug-steps');
-        const step = $('<div>')
-            .addClass('debug-step')
-            .addClass(type)
-            .text(fullMessage);
-        debugSteps.append(step);
-        console.log('[WhiskyAI] [' + type.toUpperCase() + '] ' + fullMessage);
-        if (debugSteps.length && debugSteps[0]) {
-            debugSteps.scrollTop(debugSteps[0].scrollHeight);
-        }
-    }
 
     // Tab switching
     $('.nav-tab').on('click', function() {
