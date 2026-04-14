@@ -55,13 +55,17 @@ class Gemini {
             ),
             'body' => json_encode($params),
             'method' => 'POST',
-            'timeout' => 20,  // Reduced from 30 to 20 seconds
+            'timeout' => 20,
             'sslverify' => true
         );
 
         error_log('[WhiskyAI] Gemini API Request: ' . $url);
         error_log('[WhiskyAI] Request body size: ' . strlen($args['body']) . ' bytes');
-$error_msg = $response->get_error_message();
+
+        $response = wp_remote_post($url, $args);
+
+        if (is_wp_error($response)) {
+            $error_msg = $response->get_error_message();
             error_log('[WhiskyAI] Gemini API WP_Error: ' . $error_msg);
             return array(
                 'error' => array(
@@ -85,7 +89,21 @@ $error_msg = $response->get_error_message();
                 )
             );
         }
-        $error_message = $data['error']['message'] ?? 'Unknown Gemini API error';
+        
+        $data = json_decode($body, true);
+
+        if (!$data) {
+            error_log('[WhiskyAI] Invalid JSON response from Gemini API');
+            return array(
+                'error' => array(
+                    'message' => 'Invalid response from Gemini API'
+                )
+            );
+        }
+
+        // Handle Gemini error responses
+        if (isset($data['error'])) {
+            $error_message = $data['error']['message'] ?? 'Unknown Gemini API error';
             error_log('[WhiskyAI] Gemini API Error: ' . $error_message);
             return array(
                 'error' => array(
@@ -109,25 +127,7 @@ $error_msg = $response->get_error_message();
             );
         }
 
-        error_log('[WhiskyAI] Unexpected response format: ' . json_encode($data));                'error' => array(
-                    'message' => $data['error']['message'] ?? 'Unknown Gemini API error'
-                )
-            );
-        }
-
-        // Convert Gemini response to OpenAI-like format for compatibility
-        if (isset($data['candidates'][0]['content']['parts'][0]['text'])) {
-            return array(
-                'choices' => array(
-                    array(
-                        'message' => array(
-                            'content' => $data['candidates'][0]['content']['parts'][0]['text']
-                        )
-                    )
-                )
-            );
-        }
-
+        error_log('[WhiskyAI] Unexpected response format: ' . json_encode($data));
         return array(
             'error' => array(
                 'message' => 'Unexpected response format from Gemini API'
