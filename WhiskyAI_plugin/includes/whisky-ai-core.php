@@ -90,18 +90,28 @@ class WhiskyAICore {
         $results = array();
         $errors = array();
 
+        error_log('[WhiskyAI] Processing descriptions for ' . count($product_ids) . ' products');
+
         foreach ($product_ids as $product_id) {
+            error_log('[WhiskyAI] Processing product ID: ' . $product_id);
+            
             $product = wc_get_product($product_id);
 
             if (!$product) {
+                error_log('[WhiskyAI] Product not found: ' . $product_id);
                 $errors[$product_id] = 'Product not found.';
                 continue;
             }
 
+            error_log('[WhiskyAI] Product found: ' . $product->get_name());
+
             try {
                 // Generate description
+                error_log('[WhiskyAI] Calling generate_description for product: ' . $product->get_name());
                 $description_result = $this->generate_description($product->get_name());
                 $description = $description_result['content'];
+
+                error_log('[WhiskyAI] Description generated, length: ' . strlen($description));
 
                 // Update product
                 $product->set_description($description);
@@ -111,6 +121,8 @@ class WhiskyAICore {
                 
                 $product->save();
 
+                error_log('[WhiskyAI] Product saved successfully: ' . $product_id);
+
                 $results[$product_id] = array(
                     'success' => true,
                     'description' => $description,
@@ -118,10 +130,12 @@ class WhiskyAICore {
                 );
 
             } catch (Exception $e) {
+                error_log('[WhiskyAI] Exception for product ' . $product_id . ': ' . $e->getMessage());
                 $errors[$product_id] = $e->getMessage();
             }
         }
 
+        error_log('[WhiskyAI] Processing complete. Results: ' . count($results) . ', Errors: ' . count($errors));
         return ['results' => $results, 'errors' => $errors];
     }
 

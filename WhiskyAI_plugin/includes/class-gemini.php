@@ -55,34 +55,61 @@ class Gemini {
             ),
             'body' => json_encode($params),
             'method' => 'POST',
-            'timeout' => 30
+            'timeout' => 20,  // Reduced from 30 to 20 seconds
+            'sslverify' => true
         );
 
-        $response = wp_remote_post($url, $args);
-
-        if (is_wp_error($response)) {
+        error_log('[WhiskyAI] Gemini API Request: ' . $url);
+        error_log('[WhiskyAI] Request body size: ' . strlen($args['body']) . ' bytes');
+$error_msg = $response->get_error_message();
+            error_log('[WhiskyAI] Gemini API WP_Error: ' . $error_msg);
             return array(
                 'error' => array(
-                    'message' => $response->get_error_message()
+                    'message' => 'API Connection Error: ' . $error_msg
                 )
             );
         }
 
         $body = wp_remote_retrieve_body($response);
-        $data = json_decode($body, true);
-
-        if (!$data) {
+        $code = wp_remote_retrieve_response_code($response);
+        
+        error_log('[WhiskyAI] Gemini API Response Code: ' . $code);
+        error_log('[WhiskyAI] Gemini API Response Body size: ' . strlen($body) . ' bytes');
+        
+        // Check for server errors
+        if ($code >= 500) {
+            error_log('[WhiskyAI] Server Error: ' . $body);
             return array(
                 'error' => array(
-                    'message' => 'Invalid response from Gemini API'
+                    'message' => 'Server Error (HTTP ' . $code . '): Please try again later'
+                )
+            );
+        }
+        $error_message = $data['error']['message'] ?? 'Unknown Gemini API error';
+            error_log('[WhiskyAI] Gemini API Error: ' . $error_message);
+            return array(
+                'error' => array(
+                    'message' => $error_message
                 )
             );
         }
 
-        // Handle Gemini error responses
-        if (isset($data['error'])) {
+        // Convert Gemini response to OpenAI-like format for compatibility
+        if (isset($data['candidates'][0]['content']['parts'][0]['text'])) {
+            $output_text = $data['candidates'][0]['content']['parts'][0]['text'];
+            error_log('[WhiskyAI] Success: Generated ' . strlen($output_text) . ' chars');
             return array(
-                'error' => array(
+                'choices' => array(
+                    array(
+                        'message' => array(
+                            'content' => $output_text
+                        )
+                    )
+                )
+            );
+        }
+
+        error_log('[WhiskyAI] Unexpected response format: ' . json_encode($data));                'error' => array(
                     'message' => $data['error']['message'] ?? 'Unknown Gemini API error'
                 )
             );
