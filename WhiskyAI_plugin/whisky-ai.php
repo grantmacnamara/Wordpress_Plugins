@@ -568,7 +568,7 @@ class WhiskyAI {
 
         error_log('Making request to Gemini API...');
         
-        $url = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=' . $api_key;
+        $url = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-flash:generateContent?key=' . $api_key;
         $response = wp_remote_post($url, $args);
 
         if (is_wp_error($response)) {
