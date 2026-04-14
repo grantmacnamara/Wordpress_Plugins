@@ -10,7 +10,7 @@ class Gemini {
 
     public function chat($params) {
         // Extract model from params
-        $model = $params['model'] ?? 'gemini-3.1-flash';
+        $model = $params['model'] ?? 'gemini-2.5-flash';
         
         // Convert OpenAI format to Gemini format
         $gemini_params = array(

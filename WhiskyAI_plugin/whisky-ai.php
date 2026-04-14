@@ -60,7 +60,7 @@ class WhiskyAI {
             'gemini_api_key' => '',
             'description_prompt' => $this->default_description_prompt,
             'category_prompt' => $this->default_category_prompt,
-            'gemini_model' => 'gemini-3.1-flash' // Default model
+            'gemini_model' => 'gemini-2.5-flash' // Default model
         ));
         
         $this->flavor_categories = get_option('whisky_ai_categories', $this->get_default_categories());
@@ -511,21 +511,31 @@ class WhiskyAI {
     }
 
     public function render_model_field() {
-        $model = isset($this->options['gemini_model']) ? $this->options['gemini_model'] : 'gemini-3.1-flash';
+        $model = isset($this->options['gemini_model']) ? $this->options['gemini_model'] : 'gemini-2.5-flash';
         $models = array(
-            'gemini-3.1-pro' => 'Gemini 3.1 Pro (Latest, Most Capable)',
-            'gemini-3-pro' => 'Gemini 3 Pro',
-            'gemini-3.1-flash' => 'Gemini 3.1 Flash (Recommended)',
-            'gemini-3-flash' => 'Gemini 3 Flash',
-            'gemini-2.5-pro' => 'Gemini 2.5 Pro'
+            'Stable Models' => array(
+                'gemini-2.5-pro' => 'Gemini 2.5 Pro (Most Advanced)',
+                'gemini-2.5-flash' => 'Gemini 2.5 Flash (Recommended)',
+                'gemini-2.5-flash-lite' => 'Gemini 2.5 Flash Lite (Fastest)'
+            ),
+            'Preview Models' => array(
+                'gemini-3.1-pro-preview' => 'Gemini 3.1 Pro (Preview)',
+                'gemini-3.1-flash-lite-preview' => 'Gemini 3.1 Flash Lite (Preview)',
+                'gemini-3-pro-preview' => 'Gemini 3 Pro (Preview)',
+                'gemini-3-flash-preview' => 'Gemini 3 Flash (Preview)'
+            )
         );
         
         echo '<select name="whisky_ai_settings[gemini_model]">';
-        foreach ($models as $value => $label) {
-            echo '<option value="' . esc_attr($value) . '" ' . selected($model, $value, false) . '>' . esc_html($label) . '</option>';
+        foreach ($models as $group_label => $group_models) {
+            echo '<optgroup label="' . esc_attr($group_label) . '">';
+            foreach ($group_models as $value => $label) {
+                echo '<option value="' . esc_attr($value) . '" ' . selected($model, $value, false) . '>' . esc_html($label) . '</option>';
+            }
+            echo '</optgroup>';
         }
         echo '</select>';
-        echo '<p class="description">Select the Gemini model to use for generating content. All models support up to 1,048,576 input tokens with January 2025 knowledge cutoff.</p>';
+        echo '<p class="description">Stable models are recommended for production. Preview models may have limited availability or rate limits.</p>';
     }
 
     public function verify_gemini_api() {
@@ -568,7 +578,7 @@ class WhiskyAI {
 
         error_log('Making request to Gemini API...');
         
-        $url = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-flash:generateContent?key=' . $api_key;
+        $url = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=' . $api_key;
         $response = wp_remote_post($url, $args);
 
         if (is_wp_error($response)) {
