@@ -738,22 +738,6 @@ class WhiskyAI {
                     </div>
                     <div id="generation-progress"></div>
                 </div>
-
-                <!-- Debug Modal -->
-                <div id="whisky-debug-modal" class="whisky-modal">
-                    <div class="whisky-modal-content">
-                        <span class="whisky-modal-close">&times;</span>
-                        <h2>AI Generation Progress</h2>
-                        <div class="whisky-spinner-container">
-                            <div class="whisky-spinner"></div>
-                        </div>
-                        <div class="whisky-debug-content">
-                            <div class="debug-steps"></div>
-                            <div class="debug-response"></div>
-                        </div>
-                        <button type="button" class="button whisky-modal-close-btn" style="margin-top: 15px;">Close</button>
-                    </div>
-                </div>
             </div>
 
             <div id="settings" class="tab-content">
