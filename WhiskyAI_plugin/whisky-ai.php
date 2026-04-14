@@ -21,6 +21,7 @@ if (!defined('ABSPATH')) {
 
 // Include required files
 require_once plugin_dir_path(__FILE__) . 'includes/class-gemini.php';
+require_once plugin_dir_path(__FILE__) . 'includes/whisky-ai-async.php';
 
 // Plugin Class
 class WhiskyAI {

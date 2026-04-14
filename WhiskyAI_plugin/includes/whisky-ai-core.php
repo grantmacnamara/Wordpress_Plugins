@@ -50,12 +50,19 @@ class WhiskyAICore {
                 'Do not add any other words or categories.';
         }
 
-        // Add AJAX handlers
-        add_action('wp_ajax_generate_whisky_descriptions', array($this, 'generate_descriptions'));
-        add_action('wp_ajax_generate_whisky_categories', array($this, 'generate_categories_endpoint'));
+        // Add AJAX handlers - these now queue async tasks instead of processing directly
+        add_action('wp_ajax_generate_whisky_descriptions', array($this, 'queue_descriptions'));
+        add_action('wp_ajax_generate_whisky_categories', array($this, 'queue_categories'));
+        
+        // Register async task processor hook
+        add_action('whisky_ai_process_async_task', array($this, 'process_async_task_hook'), 10, 2);
     }
 
-    public function generate_descriptions() {
+    /**
+     * Queue descriptions for async processing instead of processing directly
+     * This handler is called by AJAX and immediately returns to avoid timeout issues
+     */
+    public function queue_descriptions() {
         check_ajax_referer('whisky_ai_nonce', 'nonce');
 
         if (empty($this->gemini_key) || !$this->gemini) {
@@ -70,20 +77,78 @@ class WhiskyAICore {
             return;
         }
 
-        $result = $this->process_descriptions($product_ids);
+        error_log('[WhiskyAI] Queuing ' . count($product_ids) . ' products for description processing');
 
-        if (empty($result['errors'])) {
-            wp_send_json_success(array(
-                'message' => 'Descriptions updated successfully.',
-                'results' => $result['results']
-            ));
-        } else {
-            wp_send_json_error(array(
-                'message' => 'Some descriptions failed to update.',
-                'errors' => $result['errors'],
-                'results' => $result['results']
-            ));
+        // Queue each product with staggered delays to prevent server overload
+        $delay = 0;
+        foreach ($product_ids as $product_id) {
+            WhiskyAIAsyncTask::queue_product($product_id, 'description', $delay);
+            $delay += 5; // 5 second delay between each product queued
         }
+
+        wp_send_json_success(array(
+            'message' => 'Successfully queued ' . count($product_ids) . ' product(s) for background processing.',
+            'queued_count' => count($product_ids)
+        ));
+    }
+
+    /**
+     * Queue categories for async processing instead of processing directly
+     */
+    public function queue_categories() {
+        check_ajax_referer('whisky_ai_nonce', 'nonce');
+
+        if (empty($this->gemini_key) || !$this->gemini) {
+            wp_send_json_error(array('message' => 'Gemini API key is not set or invalid.'));
+            return;
+        }
+
+        $product_ids = isset($_POST['product_ids']) ? array_map('intval', (array)$_POST['product_ids']) : array();
+
+        if (empty($product_ids)) {
+            wp_send_json_error(array('message' => 'No product IDs provided.'));
+            return;
+        }
+
+        error_log('[WhiskyAI] Queuing ' . count($product_ids) . ' products for category processing');
+
+        // Queue each product with staggered delays to prevent server overload
+        $delay = 0;
+        foreach ($product_ids as $product_id) {
+            WhiskyAIAsyncTask::queue_product($product_id, 'category', $delay);
+            $delay += 5; // 5 second delay between each product queued
+        }
+
+        wp_send_json_success(array(
+            'message' => 'Successfully queued ' . count($product_ids) . ' product(s) for background processing.',
+            'queued_count' => count($product_ids)
+        ));
+    }
+
+    /**
+     * Hook callback for processing async tasks
+     * Called by WordPress scheduled events
+     */
+    public function process_async_task_hook($product_id, $task_type) {
+        // Initialize the async task handler
+        $async_handler = new WhiskyAIAsyncTask($this->gemini, $this->options, $this->flavor_categories);
+        $async_handler->process_async_task($product_id, $task_type);
+    }
+
+    /**
+     * Generate descriptions - kept for backward compatibility but now queues async instead of processing directly
+     * @deprecated Use queue_descriptions() instead
+     */
+    public function generate_descriptions() {
+        $this->queue_descriptions();
+    }
+
+    /**
+     * Generate categories endpoint - kept for backward compatibility but now queues async instead of processing directly
+     * @deprecated Use queue_categories() instead
+     */
+    public function generate_categories_endpoint() {
+        $this->queue_categories();
     }
 
     public function process_descriptions($product_ids) {
@@ -138,6 +203,11 @@ class WhiskyAICore {
         error_log('[WhiskyAI] Processing complete. Results: ' . count($results) . ', Errors: ' . count($errors));
         return ['results' => $results, 'errors' => $errors];
     }
+
+    /**
+     * @deprecated This method should not be called directly
+     * Use process_async_task_hook() for background processing instead
+     */
 
     public function generate_categories_endpoint() {
         check_ajax_referer('whisky_ai_nonce', 'nonce');
@@ -219,6 +289,11 @@ class WhiskyAICore {
 
         return ['results' => $results, 'errors' => $errors];
     }
+
+    /**
+     * @deprecated This method should not be called directly
+     * Use process_async_task_hook() for background processing instead
+     */
 
     private function generate_description($product_name) {
         $request_data = array(
