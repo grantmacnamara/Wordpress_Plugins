@@ -298,7 +298,21 @@ class WhiskyAICore {
         
         $categories_text = $response['choices'][0]['message']['content'];
         
-        // Improved category parsing
+        // Category synonyms for flexible matching
+        $category_synonyms = array(
+            'Floral' => array('Floral', 'Flower', 'Flowers', 'Flowerery'),
+            'Fruity' => array('Fruity', 'Fruit', 'Fruits'),
+            'Vanilla' => array('Vanilla', 'Vanillin'),
+            'Honey' => array('Honey', 'Honeyed', 'Honeycomb'),
+            'Spicy' => array('Spicy', 'Spice', 'Spices', 'Peppery', 'Pepper'),
+            'Peated' => array('Peated', 'Peat', 'Peaty', 'Smokey', 'Smoke', 'Smoked', 'Smoky'),
+            'Salty' => array('Salty', 'Salt', 'Saline'),
+            'Woody' => array('Woody', 'Wood', 'Woodsy'),
+            'Nutty' => array('Nutty', 'Nuts', 'Nut', 'Almond', 'Hazelnut'),
+            'Chocolatey' => array('Chocolatey', 'Chocolate', 'Cocoa')
+        );
+        
+        // Improved category parsing with synonym matching
         $category_ids = array();
         $lines = explode("
 ", $categories_text);
@@ -307,8 +321,29 @@ class WhiskyAICore {
             $category = trim($line, " -	
 
  ");
+            
+            // First try exact match
             if (isset($this->flavor_categories[$category])) {
                 $category_ids[] = $this->flavor_categories[$category];
+                continue;
+            }
+            
+            // Then try case-insensitive exact match
+            foreach ($this->flavor_categories as $cat_name => $cat_id) {
+                if (strtolower($category) === strtolower($cat_name)) {
+                    $category_ids[] = $cat_id;
+                    break;
+                }
+            }
+            
+            // Finally try synonym matching
+            foreach ($category_synonyms as $main_category => $synonyms) {
+                foreach ($synonyms as $synonym) {
+                    if (strtolower($category) === strtolower($synonym)) {
+                        $category_ids[] = $this->flavor_categories[$main_category];
+                        break 2; // Break both loops
+                    }
+                }
             }
         }
 
