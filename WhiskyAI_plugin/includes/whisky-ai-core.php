@@ -204,42 +204,6 @@ class WhiskyAICore {
         return ['results' => $results, 'errors' => $errors];
     }
 
-    /**
-     * @deprecated This method should not be called directly
-     * Use process_async_task_hook() for background processing instead
-     */
-
-    public function generate_categories_endpoint() {
-        check_ajax_referer('whisky_ai_nonce', 'nonce');
-
-        if (empty($this->gemini_key) || !$this->gemini) {
-            wp_send_json_error(array('message' => 'Gemini API key is not set or invalid.'));
-            return;
-        }
-
-        $product_ids = isset($_POST['product_ids']) ? array_map('intval', (array)$_POST['product_ids']) : array();
-
-        if (empty($product_ids)) {
-            wp_send_json_error(array('message' => 'No product IDs provided.'));
-            return;
-        }
-        
-        $result = $this->process_categories($product_ids);
-
-        if (empty($result['errors'])) {
-            wp_send_json_success(array(
-                'message' => 'Categories updated successfully.',
-                'results' => $result['results']
-            ));
-        } else {
-            wp_send_json_error(array(
-                'message' => 'Some categories failed to update.',
-                'errors' => $result['errors'],
-                'results' => $result['results']
-            ));
-        }
-    }
-
     public function process_categories($product_ids) {
         $results = array();
         $errors = array();
